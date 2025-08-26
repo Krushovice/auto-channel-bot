@@ -48,7 +48,7 @@ async def notify_email(app: Application) -> None:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = settings.email.send_from
-    msg["To"] = ", ".join(settings.email.send_to)
+    msg["To"] = settings.email.send_to
 
     # Простой текст и HTML-версия
     plain = (
