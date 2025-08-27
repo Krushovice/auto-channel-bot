@@ -15,6 +15,6 @@ router = Router()
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
     await message.answer(
-        text=WELCOME.format(channel=settings.store.channel_link),
+        text=WELCOME.format(channel=settings.store.channel),
         reply_markup=WELCOME_KB,
     )
