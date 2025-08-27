@@ -13,7 +13,7 @@ class TelegramConfig(BaseModel):
 
 
 class StoreConfig(BaseModel):
-    channel_link: str
+    channel: str
     youtube: str
     chat: str
     site: str
@@ -27,6 +27,15 @@ class EmailConfig(BaseModel):
     smtp_user: str
     send_from: EmailStr
     send_to: EmailStr
+
+
+class InfoConfig(BaseModel):
+    proxy: str
+    logistic: str
+    body_repair: str
+    detailing: str
+    auction_stat: str
+    auc_list: str
 
 
 # ========== ROOT SETTINGS ==========
@@ -44,6 +53,7 @@ class Settings(BaseSettings):
     bot: TelegramConfig
     store: StoreConfig
     email: EmailConfig
+    info: InfoConfig
 
 
 settings = Settings()
