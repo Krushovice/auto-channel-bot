@@ -1,90 +1,134 @@
 import logging
 import os
 import sys
+import tempfile
 from logging.handlers import RotatingFileHandler
 
-# Корень проекта: app/.. -> корень
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+from core.config import settings
 
 FMT = "%(asctime)s %(levelname)s:%(name)s: %(message)s"
 DATEFMT = "%Y-%m-%d %H:%M:%S"
+MAX_BYTES = 10 * 1024 * 1024
+BACKUPS = 10
 
-# ENV с умолчаниями
-APP_NAME = os.getenv("APP_NAME", "jp_cars_bot")
-LOG_DIR = os.getenv("LOG_DIR", os.path.join(PROJECT_ROOT, "logs"))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()  # корневой уровень
-CONSOLE_LEVEL = os.getenv("CONSOLE_LEVEL", "INFO").upper()  # уровень консоли
-FILE_LEVEL = os.getenv("FILE_LEVEL", "INFO").upper()  # уровень файла app.info.log
-AIOGRAM_LEVEL = os.getenv("AIOGRAM_LEVEL", "INFO").upper()
-SMTP_LEVEL = os.getenv("SMTP_LEVEL", "INFO").upper()
 
-INFO_LOG = os.path.join(LOG_DIR, "app.info.log")
-ERR_LOG = os.path.join(LOG_DIR, "app.error.log")
+def _lvl(name: str, default=logging.INFO) -> int:
+    return getattr(logging, str(name).upper(), default)
+
+
+def _resolve_log_dir(
+    preferred: str,
+    app_name: str,
+) -> tuple[str | None, list[str]]:
+    """
+    Пытается создать и проверить права на запись в каталоги по очереди:
+      1) preferred
+      2) ./logs
+      3) /tmp/<app_name>-logs
+    Возвращает (выбранный_каталог_или_None, список_что_пробовали).
+    """
+    tried: list[str] = []
+    candidates = [
+        preferred,
+        os.path.abspath("./logs"),
+        os.path.join(tempfile.gettempdir(), f"{app_name}-logs"),
+    ]
+
+    for d in candidates:
+        tried.append(d)
+        try:
+            os.makedirs(d, exist_ok=True)
+            test_path = os.path.join(d, ".write_test")
+            with open(test_path, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(test_path)
+            return d, tried
+        except Exception:
+            continue
+
+    return None, tried
 
 
 def setup_logging() -> None:
-    """Единоразовая настройка логов (консоль + два файла)."""
+    """Консоль + 2 файла (INFO/ERROR) с фоллбэком директории. Повторные вызовы — no-op."""
     if getattr(setup_logging, "_configured", False):
         return
 
-    os.makedirs(LOG_DIR, exist_ok=True)
+    cfg = settings.logger  # LoggingConfig из твоих nested settings
 
     root = logging.getLogger()
-    root.setLevel(LOG_LEVEL)
+    root.setLevel(_lvl(cfg.log_level))
 
-    # Сброс возможных дефолтных хендлеров (важно при повторном импорте/тестах)
+    # убрать дефолтные хендлеры
     for h in list(root.handlers):
         root.removeHandler(h)
 
-    formatter = logging.Formatter(FMT, datefmt=DATEFMT)
+    fmt = logging.Formatter(FMT, datefmt=DATEFMT)
 
-    # --- Консоль (для systemd/journalctl) ---
+    # --- консоль (journalctl) ---
     console = logging.StreamHandler(sys.stdout)
-    console.setLevel(CONSOLE_LEVEL)
-    console.setFormatter(formatter)
+    console.setLevel(_lvl(cfg.console_level))
+    console.setFormatter(fmt)
     root.addHandler(console)
 
-    # --- Файл INFO+ ---
-    info_file = RotatingFileHandler(
-        INFO_LOG,
-        maxBytes=10 * 1024 * 1024,
-        backupCount=10,
-        encoding="utf-8",
-    )
-    info_file.setLevel(FILE_LEVEL)
-    info_file.setFormatter(formatter)
-    root.addHandler(info_file)
+    # --- подобрать рабочую директорию логов ---
+    log_dir, tried = _resolve_log_dir(cfg.log_dir, cfg.app_name)
+    if not log_dir:
+        root.warning(
+            "Нет прав на запись ни в один каталог логов: %s — работаем только с консолью.",
+            ", ".join(tried),
+        )
+        setup_logging._configured = True
+        return
 
-    # --- Файл ERROR+ ---
-    err_file = RotatingFileHandler(
-        ERR_LOG,
-        maxBytes=10 * 1024 * 1024,
-        backupCount=10,
-        encoding="utf-8",
-    )
-    err_file.setLevel(logging.ERROR)
-    err_file.setFormatter(formatter)
-    root.addHandler(err_file)
+    info_log_path = os.path.join(log_dir, f"{cfg.app_name}.info.log")
+    err_log_path = os.path.join(log_dir, f"{cfg.app_name}.error.log")
 
-    # Шум гасим/подкручиваем
-    logging.getLogger("aiogram").setLevel(AIOGRAM_LEVEL)
-    logging.getLogger("aiosmtplib").setLevel(SMTP_LEVEL)
-
-    # Логируем необработанные исключения (чтобы видеть stacktrace в файле)
-    def _excepthook(exc_type, exc_value, exc_tb):
-        if issubclass(exc_type, KeyboardInterrupt):
-            root.info("Interrupted by user")
-            return
-        root.exception(
-            "Uncaught exception",
-            exc_info=(exc_type, exc_value, exc_tb),
+    # --- файл INFO+ ---
+    try:
+        info_file = RotatingFileHandler(
+            info_log_path,
+            maxBytes=MAX_BYTES,
+            backupCount=BACKUPS,
+            encoding="utf-8",
+        )
+        info_file.setLevel(_lvl(cfg.file_level))
+        info_file.setFormatter(fmt)
+        root.addHandler(info_file)
+    except Exception as e:
+        root.warning(
+            "Не удалось подключить info-файл логов (%s): %s",
+            info_log_path,
+            e,
         )
 
-    sys.excepthook = _excepthook
+    # --- файл ERROR+ ---
+    try:
+        err_file = RotatingFileHandler(
+            err_log_path,
+            maxBytes=MAX_BYTES,
+            backupCount=BACKUPS,
+            encoding="utf-8",
+        )
+        err_file.setLevel(logging.ERROR)
+        err_file.setFormatter(fmt)
+        root.addHandler(err_file)
+    except Exception as e:
+        root.warning(
+            "Не удалось подключить error-файл логов (%s): %s",
+            err_log_path,
+            e,
+        )
+
+    # Понизим/поднимем болтливость библиотек
+    logging.getLogger("aiogram").setLevel(_lvl(cfg.aiogram_level))
+    logging.getLogger("aiosmtplib").setLevel(_lvl(cfg.smtp_level))
 
     setup_logging._configured = True
     root.info(
-        "Logging initialized | dir=%s | level=%s",
-        os.path.abspath(LOG_DIR),
-        LOG_LEVEL,
+        "Logging initialized | chosen_dir=%s | preferred=%s | app=%s | level=%s",
+        log_dir,
+        cfg.log_dir,
+        cfg.app_name,
+        cfg.log_level,
     )
