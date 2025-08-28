@@ -6,7 +6,7 @@ from utils.logger import setup_logging
 
 async def main():
     setup_logging()
-    bot, dp = await build_bot_dispatcher()
+    bot, dp = build_bot_dispatcher()
     await dp.start_polling(
         bot,
         allowed_updates=dp.resolve_used_update_types(),
