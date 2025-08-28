@@ -80,9 +80,9 @@ def setup_promo_scheduler(
     _scheduler.add_job(
         _send_promo,
         trigger="interval",
-        days=3,
+        days=10,
         args=[bot, channel],
-        id="promo_every_3_days",
+        id="promo_every_10_days",
         replace_existing=True,
         next_run_time=next_time,
         coalesce=True,  # слить пропуски, если процесс не работал
