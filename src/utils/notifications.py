@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from email.message import EmailMessage
 
@@ -86,11 +87,39 @@ async def notify_email(app: Application) -> None:
         logger.exception("Не удалось отправить письмо с заявкой")
 
 
-async def notify_all(
-    bot: Bot,
-    app: Application,
-    full_name: str,
-) -> None:
+DEFAULT_TG_TIMEOUT = 10
+DEFAULT_EMAIL_TIMEOUT = 25  # у smtp бывает дольше
+
+
+async def _run_safely(func, *, name: str, timeout: float) -> None:
+    try:
+        async with asyncio.timeout(timeout):
+            await func
+        logger.info("Notify %s: done", name)
+    except Exception:
+        # Логируем, но НИЧЕГО не пробрасываем выше
+        logger.exception("Notify %s: failed", name)
+
+
+async def notify_all(bot: Bot, app, full_name: str) -> None:
+    """Запускает обе нотификации параллельно, ошибки не всплывают."""
     html = app.to_summary(full_name)
-    await notify_admin(bot, html)
-    await notify_email(app)
+    tg_task = _run_safely(
+        notify_admin(bot, html),
+        name="tg",
+        timeout=DEFAULT_TG_TIMEOUT,
+    )
+    mail_task = _run_safely(
+        notify_email(app),
+        name="email",
+        timeout=DEFAULT_EMAIL_TIMEOUT,
+    )
+
+    # return_exceptions=True — ключевое: исключения не роняют notify_all
+    await asyncio.gather(tg_task, mail_task, return_exceptions=True)
+
+    logger.info(
+        "Notify group finished | user_id=%s city=%s",
+        app.tg_user_id,
+        app.city,
+    )
