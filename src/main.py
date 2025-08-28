@@ -1,6 +1,6 @@
 import asyncio
 
-from .app_builder import build_bot_dispatcher
+from app_builder import build_bot_dispatcher
 from utils.logger import setup_logging
 
 
