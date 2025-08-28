@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from aiogram import Router, F, Bot
@@ -103,11 +104,22 @@ async def step_contact(message: Message, state: FSMContext, bot: Bot):
         contact=data.get("contact", ""),
     )
 
-    # 1) Уведомления (Telegram + Email)
-    await notify_all(bot, app, full_name)
-
     # Ответ клиенту
     await message.answer(
         CONFIRM_TO_CLIENT,
         reply_markup=REMOVE_KB,
+    )
+
+    # 1) Уведомления (Telegram + Email)
+    # Уведомления — в фоне
+    task = asyncio.create_task(notify_all(bot, app, full_name))
+    task.add_done_callback(
+        lambda t: (
+            logger.exception(
+                "Notify task crashed",
+                exc_info=t.exception(),
+            )
+            if t.exception()
+            else None
+        )
     )
